@@ -15,18 +15,7 @@
     canvas {
       display: block;
     }
-    #hint {
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: 24px;
-      text-align: center;
-      font-family: Helvetica, Arial, sans-serif;
-      font-size: 14px;
-      color: #ff7a1a;
-      transition: opacity 0.8s;
-      pointer-events: none;
-    }
+
   </style>
 </head>
 <body>
@@ -34,7 +23,6 @@
 
   <script>
     const canvas = document.getElementById("c");
-    const hint = document.getElementById("hint");
     const gl = canvas.getContext("webgl", { alpha: false, antialias: false });
 
     const FONT = "Helvetica, Arial, sans-serif";
@@ -133,11 +121,6 @@
       }
     `;
 
-    if (!gl) {
-      hint.textContent = "Je browser ondersteunt WebGL niet.";
-    } else {
-      start();
-    }
 
     function start() {
       function maakShader(type, src) {
