@@ -15,25 +15,75 @@
     canvas {
       display: block;
     }
+    #hint {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 24px;
+      text-align: center;
+      font-family: Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      color: #ff7a1a;
+      transition: opacity 0.8s;
+      pointer-events: none;
+    }
 
+    /* Informatie naast de dag waarover je hovert */
+    .info {
+      position: fixed;
+      font-family: Helvetica, Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.4;
+      color: #ff7a1a;
+      opacity: 0;
+      transition: opacity 0.4s, top 0.3s;
+      pointer-events: none;
+    }
+    .info.aan {
+      opacity: 1;
+    }
+    .info b {
+      display: block;
+      font-size: 18px;
+      margin-bottom: 6px;
+    }
   </style>
 </head>
 <body>
   <canvas id="c"></canvas>
+  <div id="hint">Beweeg je cursor over de letters</div>
+  <div class="info" id="infoL"></div>
+  <div class="info" id="infoR"></div>
 
   <script>
     const canvas = document.getElementById("c");
+    const hint = document.getElementById("hint");
+    const infoL = document.getElementById("infoL");
+    const infoR = document.getElementById("infoR");
     const gl = canvas.getContext("webgl", { alpha: false, antialias: false });
 
     const FONT = "Helvetica, Arial, sans-serif";
     const TITEL = ["Soep", "van de", "dag"];
     const WOORDEN = ["maandag", "dinsdag", "woensdag", "donderdag"];
 
+    const INFO = [
+      { naam: "Spinaziesoep", prijs: "€1,70", smaak: "3,5/5",
+        tekst: "De soep was redelijk dik met wat brokjes in." },
+      { naam: "Paprikasoep", prijs: "€1,70", smaak: "4,5/5",
+        tekst: "Een heerlijke, zachte soep." },
+      { naam: "Paprikasoep", prijs: "€2,70", smaak: "4,5/5",
+        tekst: "Dezelfde soep als dinsdag, deze keer een grote omdat ik het zeer lekker vond." },
+      { naam: "Knolseldersoep", prijs: "€1,70", smaak: "4/5",
+        tekst: "Verrassend lekker, maar na een tijdje wat pikant." }
+    ];
+
     // Instellingen (in seconden)
     const GOLFTIJD = 5;       // zo lang kun je met de letters spelen
     const VERDAMPTIJD = 3.5;  // zo lang duurt het verdampen
-    const INTROTIJD = 3;      // zo lang duurt het verschijnen van de dagen
+    const INTROTIJD = 2.5;    // zo lang duurt het verschijnen van de dagen
+    const GOLFSTOP = 2;       // golven stoppen na zoveel seconden bij de dagen
     const MAX_GOLVEN = 12;
+    const DAGSTART = GOLFTIJD + VERDAMPTIJD;
 
     const VERT = `
       attribute vec2 aPos;
@@ -54,6 +104,8 @@
       uniform float uAmbient;
       uniform float uVanish;
       uniform float uRise;
+      uniform vec3 uBand;   // bovenkant, hoogte per regel, aan/uit
+      uniform vec4 uOp;     // doorzichtigheid per dag
       uniform vec4 uRip[${MAX_GOLVEN}];
 
       // Kleur van de letters (oranje)
@@ -116,11 +168,26 @@
         }
         a /= 9.0;
 
-        float alpha = a * (1.0 - cp);
+        // Per dag een eigen doorzichtigheid (voor het hover-effect)
+        float op = 1.0;
+        if (uBand.z > 0.5) {
+          float idx = floor((sp.y - uBand.x) / uBand.y);
+          if (idx < 0.5) op = uOp.x;
+          else if (idx < 1.5) op = uOp.y;
+          else if (idx < 2.5) op = uOp.z;
+          else op = uOp.w;
+        }
+
+        float alpha = a * (1.0 - cp) * op;
         gl_FragColor = vec4(mix(vec3(1.0), ORANJE, alpha), 1.0);
       }
     `;
 
+    if (!gl) {
+      hint.textContent = "Je browser ondersteunt WebGL niet.";
+    } else {
+      start();
+    }
 
     function start() {
       function maakShader(type, src) {
@@ -143,36 +210,44 @@
       gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
 
       const U = {};
-      ["uTex", "uRes", "uDpr", "uTime", "uAmbient", "uVanish", "uRise", "uRip"].forEach(function (n) {
+      ["uTex", "uRes", "uDpr", "uTime", "uAmbient", "uVanish", "uRise", "uBand", "uOp", "uRip"].forEach(function (n) {
         U[n] = gl.getUniformLocation(prog, n);
       });
 
+      const LH = 0.95;
       let W, H, dpr, texTitel, texWoorden;
+      let bandTop = 0, bandLh = 1, smal = false;
       let t0 = null;
+      let hover = -1;
+      let hintGezet = false;
       const golven = [];
       const ripData = new Float32Array(MAX_GOLVEN * 4);
+      const opNu = [1, 1, 1, 1];
       let laatste = { x: -999, y: -999, t: 0 };
 
       function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
-      function maakTextuur(regels) {
-        const c = document.createElement("canvas");
-        c.width = Math.round(W * dpr);
-        c.height = Math.round(H * dpr);
-        const g = c.getContext("2d");
-        g.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-        const LH = 0.95;
+      // Berekent de lettergrootte zodat de regels in het scherm passen
+      function bereken(regels, breedteDeel) {
+        const g = document.createElement("canvas").getContext("2d");
         g.font = "700 100px " + FONT;
         let breedste = 0;
         regels.forEach(function (r) {
           breedste = Math.max(breedste, g.measureText(r).width);
         });
         const maat = Math.min(
-          (W * 0.92) / breedste * 100,
+          (W * breedteDeel) / breedste * 100,
           (H * 0.92) / (regels.length * LH)
         );
+        return { maat: maat, breedte: breedste * maat / 100 };
+      }
 
+      function maakTextuur(regels, maat) {
+        const c = document.createElement("canvas");
+        c.width = Math.round(W * dpr);
+        c.height = Math.round(H * dpr);
+        const g = c.getContext("2d");
+        g.setTransform(dpr, 0, 0, dpr, 0, 0);
         g.font = "700 " + maat + "px " + FONT;
         g.fillStyle = "#000";
         g.textAlign = "center";
@@ -201,8 +276,60 @@
         canvas.style.width = W + "px";
         canvas.style.height = H + "px";
         gl.viewport(0, 0, canvas.width, canvas.height);
-        texTitel = maakTextuur(TITEL);
-        texWoorden = maakTextuur(WOORDEN);
+
+        const titel = bereken(TITEL, 0.92);
+        texTitel = maakTextuur(TITEL, titel.maat);
+
+        // De dagen krijgen links en rechts ruimte voor de informatie
+        const deel = W >= 760 ? 0.6 : 0.92;
+        const woorden = bereken(WOORDEN, deel);
+        texWoorden = maakTextuur(WOORDEN, woorden.maat);
+
+        bandLh = woorden.maat * LH;
+        bandTop = H / 2 - (WOORDEN.length / 2) * bandLh;
+
+        const marge = (W - woorden.breedte) / 2;
+        smal = marge - 48 < 150;
+
+        if (smal) {
+          infoL.style.left = "20px";
+          infoL.style.width = (W - 40) + "px";
+          infoL.style.top = "auto";
+          infoL.style.bottom = "90px";
+          infoR.style.left = "20px";
+          infoR.style.width = (W - 40) + "px";
+          infoR.style.top = "auto";
+          infoR.style.bottom = "28px";
+          infoL.style.transform = "none";
+          infoR.style.transform = "none";
+        } else {
+          infoL.style.left = "24px";
+          infoL.style.width = (marge - 48) + "px";
+          infoR.style.left = (W / 2 + woorden.breedte / 2 + 24) + "px";
+          infoR.style.width = (marge - 48) + "px";
+          infoL.style.bottom = "auto";
+          infoR.style.bottom = "auto";
+          infoL.style.transform = "translateY(-50%)";
+          infoR.style.transform = "translateY(-50%)";
+        }
+      }
+
+      function toonInfo(idx) {
+        if (idx < 0) {
+          infoL.classList.remove("aan");
+          infoR.classList.remove("aan");
+          return;
+        }
+        const d = INFO[idx];
+        infoL.innerHTML = "<b>" + d.naam + "</b>Prijs: " + d.prijs + "<br>Smaak: " + d.smaak;
+        infoR.textContent = d.tekst;
+        if (!smal) {
+          const y = (bandTop + (idx + 0.5) * bandLh) + "px";
+          infoL.style.top = y;
+          infoR.style.top = y;
+        }
+        infoL.classList.add("aan");
+        infoR.classList.add("aan");
       }
 
       function frame(ts) {
@@ -213,19 +340,37 @@
         let ambient = 0;
         let vanish = 0;
         let rise = 120;
+        let bandAan = 0;
         const smelt = clamp(el / GOLFTIJD, 0, 1);
+
+        // Na een tweetal seconden bij de dagen stoppen de golven
+        const golfLeven = 1 - clamp((el - DAGSTART - GOLFSTOP) / 0.7, 0, 1);
 
         if (el < GOLFTIJD) {
           ambient = smelt * smelt * 28;
-        } else if (el < GOLFTIJD + VERDAMPTIJD) {
+        } else if (el < DAGSTART) {
           vanish = (el - GOLFTIJD) / VERDAMPTIJD;
           ambient = 28 + vanish * 14;
         } else {
           tex = texWoorden;
-          const intro = clamp((el - GOLFTIJD - VERDAMPTIJD) / INTROTIJD, 0, 1);
+          bandAan = 1;
+          const intro = clamp((el - DAGSTART) / INTROTIJD, 0, 1);
           vanish = 1 - intro;
           rise = -80;
-          ambient = (1 - intro) * (1 - intro) * 24;
+          ambient = (1 - intro) * (1 - intro) * 24 * golfLeven;
+        }
+
+        // Hover-effect: de andere dagen worden half doorzichtig
+        for (let i = 0; i < 4; i++) {
+          const doel = hover < 0 || hover === i ? 1 : 0.5;
+          opNu[i] += (doel - opNu[i]) * 0.15;
+        }
+
+        // Hint na het verschijnen van de dagen
+        if (!hintGezet && el >= DAGSTART + INTROTIJD) {
+          hintGezet = true;
+          hint.textContent = "Beweeg over een dag";
+          hint.style.opacity = 1;
         }
 
         // Golven doorgeven aan de shader
@@ -236,7 +381,7 @@
           ripData[i * 4] = g.x;
           ripData[i * 4 + 1] = g.y;
           ripData[i * 4 + 2] = g.t;
-          ripData[i * 4 + 3] = 9 * (1 + smelt * 1.6);
+          ripData[i * 4 + 3] = 9 * (1 + smelt * 1.6) * golfLeven;
         }
 
         gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -247,24 +392,50 @@
         gl.uniform1f(U.uAmbient, ambient);
         gl.uniform1f(U.uVanish, vanish);
         gl.uniform1f(U.uRise, rise);
+        gl.uniform3f(U.uBand, bandTop, bandLh, bandAan);
+        gl.uniform4f(U.uOp, opNu[0], opNu[1], opNu[2], opNu[3]);
         gl.uniform4fv(U.uRip, ripData);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
         requestAnimationFrame(frame);
       }
 
-      window.addEventListener("pointermove", function (e) {
+      function beweeg(e) {
         const now = performance.now() / 1000;
         if (t0 === null) {
           t0 = now;
           hint.style.opacity = 0;
         }
-        const afstand = Math.hypot(e.clientX - laatste.x, e.clientY - laatste.y);
-        if (afstand > 14 && now - laatste.t > 0.06) {
-          golven.push({ x: e.clientX, y: e.clientY, t: now });
-          if (golven.length > MAX_GOLVEN) golven.shift();
-          laatste = { x: e.clientX, y: e.clientY, t: now };
+        const el = now - t0;
+
+        // Golven maken (stopt bij de dagen)
+        if (el < DAGSTART + GOLFSTOP) {
+          const afstand = Math.hypot(e.clientX - laatste.x, e.clientY - laatste.y);
+          if (afstand > 14 && now - laatste.t > 0.06) {
+            golven.push({ x: e.clientX, y: e.clientY, t: now });
+            if (golven.length > MAX_GOLVEN) golven.shift();
+            laatste = { x: e.clientX, y: e.clientY, t: now };
+          }
         }
+
+        // Hover over een dag
+        if (el >= DAGSTART + INTROTIJD) {
+          let idx = Math.floor((e.clientY - bandTop) / bandLh);
+          if (idx < 0 || idx > 3) idx = -1;
+          if (idx !== hover) {
+            hover = idx;
+            toonInfo(idx);
+          }
+          if (idx >= 0) hint.style.opacity = 0;
+        }
+      }
+
+      window.addEventListener("pointermove", beweeg);
+      window.addEventListener("pointerdown", beweeg);
+
+      document.documentElement.addEventListener("mouseleave", function () {
+        hover = -1;
+        toonInfo(-1);
       });
 
       let resizeTimer;
