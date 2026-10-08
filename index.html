@@ -23,7 +23,7 @@
       text-align: center;
       font-family: Helvetica, Arial, sans-serif;
       font-size: 14px;
-      color: #999;
+      color: #ff7a1a;
       transition: opacity 0.8s;
       pointer-events: none;
     }
@@ -35,8 +35,8 @@
 
   <script>
     const canvas = document.getElementById("c");
-    const ctx = canvas.getContext("2d");
     const hint = document.getElementById("hint");
+    const gl = canvas.getContext("webgl", { alpha: false, antialias: false });
 
     const FONT = "Helvetica, Arial, sans-serif";
     const TITEL = ["Soep", "van de", "dag"];
@@ -44,194 +44,256 @@
 
     // Instellingen (in seconden)
     const GOLFTIJD = 5;       // zo lang kun je met de letters spelen
-    const VERDAMPTIJD = 3;    // zo lang duurt het verdampen
-    const INTROTIJD = 2.5;    // zo lang duurt het zichtbaar worden van de dagen
-    const RIPPLE_LEVEN = 3;   // hoe lang een golf blijft bestaan
+    const VERDAMPTIJD = 3.5;  // zo lang duurt het verdampen
+    const INTROTIJD = 3;      // zo lang duurt het verschijnen van de dagen
+    const MAX_GOLVEN = 12;
 
-    let W, H, dpr, cell, nx, ny, hash;
-    let titelBron, woordenBron;
-    let t0 = null;
-    const golven = [];
-    let laatste = { x: -999, y: -999 };
+    const VERT = `
+      attribute vec2 aPos;
+      void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+    `;
 
-    function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+    const FRAG = `
+      #ifdef GL_FRAGMENT_PRECISION_HIGH
+      precision highp float;
+      #else
+      precision mediump float;
+      #endif
 
-    // Tekent de regels groot op een apart canvas
-    function maakBron(regels) {
-      const c = document.createElement("canvas");
-      c.width = W * dpr;
-      c.height = H * dpr;
-      const g = c.getContext("2d");
-      g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      g.fillStyle = "#fff";
-      g.fillRect(0, 0, W, H);
+      uniform sampler2D uTex;
+      uniform vec2 uRes;
+      uniform float uDpr;
+      uniform float uTime;
+      uniform float uAmbient;
+      uniform float uVanish;
+      uniform float uRise;
+      uniform vec4 uRip[${MAX_GOLVEN}];
 
-      const LH = 0.95;
-      g.font = "700 100px " + FONT;
-      let breedste = 0;
-      regels.forEach(function (r) {
-        breedste = Math.max(breedste, g.measureText(r).width);
-      });
-      const maat = Math.min(
-        (W * 0.92) / breedste * 100,
-        (H * 0.92) / (regels.length * LH)
-      );
+      // Kleur van de letters (oranje)
+      const vec3 ORANJE = vec3(1.0, 0.48, 0.10);
 
-      g.font = "700 " + maat + "px " + FONT;
-      g.fillStyle = "#111";
-      g.textAlign = "center";
-      g.textBaseline = "middle";
-      regels.forEach(function (r, i) {
-        const y = H / 2 + (i - (regels.length - 1) / 2) * maat * LH;
-        g.fillText(r, W / 2, y);
-      });
-      return c;
-    }
-
-    function init() {
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
-      W = window.innerWidth;
-      H = window.innerHeight;
-      canvas.width = W * dpr;
-      canvas.height = H * dpr;
-      canvas.style.width = W + "px";
-      canvas.style.height = H + "px";
-
-      cell = Math.max(8, Math.round(W / 150));
-      nx = Math.ceil(W / cell);
-      ny = Math.ceil(H / cell);
-      hash = new Float32Array(nx * ny);
-      for (let i = 0; i < hash.length; i++) hash[i] = Math.random();
-
-      titelBron = maakBron(TITEL);
-      woordenBron = maakBron(WOORDEN);
-    }
-
-    function frame(ts) {
-      const now = ts / 1000;
-      const el = t0 === null ? 0 : now - t0;
-
-      // Welke fase zitten we in?
-      let bron = titelBron;
-      let modus = "titel";
-      let ambient = 0;
-      let evap = 0;
-      let intro = 0;
-      const smelt = clamp(el / GOLFTIJD, 0, 1);
-
-      if (el < GOLFTIJD) {
-        ambient = smelt * smelt * 60;
-      } else if (el < GOLFTIJD + VERDAMPTIJD) {
-        modus = "verdampen";
-        evap = (el - GOLFTIJD) / VERDAMPTIJD;
-        ambient = 60 + evap * 30;
-      } else {
-        modus = "woorden";
-        bron = woordenBron;
-        intro = clamp((el - GOLFTIJD - VERDAMPTIJD) / INTROTIJD, 0, 1);
-        ambient = (1 - intro) * (1 - intro) * 50;
+      float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+      }
+      float noise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+                   mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
       }
 
-      // Verlopen golven opruimen
-      for (let i = golven.length - 1; i >= 0; i--) {
-        if (now - golven[i].t > RIPPLE_LEVEN) golven.splice(i, 1);
-      }
-      const nG = golven.length;
-      const gx = new Float32Array(nG);
-      const gy = new Float32Array(nG);
-      const gAmp = new Float32Array(nG);
-      const gFront = new Float32Array(nG);
-      for (let k = 0; k < nG; k++) {
-        const age = now - golven[k].t;
-        gx[k] = golven[k].x;
-        gy[k] = golven[k].y;
-        gAmp[k] = 24 * Math.pow(1 - age / RIPPLE_LEVEN, 1.5) * (1 + smelt * 1.5);
-        gFront[k] = age * 320;
-      }
+      void main() {
+        vec2 pos = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y) / uDpr;
+        vec2 d = vec2(0.0);
 
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+        // Zachte, langzame golving door het hele woord
+        d.x += uAmbient * (sin(pos.x * 0.008 + pos.y * 0.011 + uTime * 1.3) * 0.6
+                         + sin(pos.y * 0.02 - uTime * 1.9) * 0.4);
+        d.y += uAmbient * 0.7 * (cos(pos.x * 0.012 - uTime * 1.5) * 0.5
+                               + sin(pos.y * 0.007 + pos.x * 0.006 + uTime) * 0.5);
 
-      const cd = cell * dpr;
-      for (let j = 0; j < ny; j++) {
-        const y = j * cell;
-        const cy = y + cell / 2;
-        for (let i = 0; i < nx; i++) {
-          const x = i * cell;
-          const cx = x + cell / 2;
-          const h = hash[j * nx + i];
-          let dx = 0;
-          let dy = 0;
-
-          // Golfbeweging door het hele woord
-          if (ambient > 0) {
-            dx += ambient * (Math.sin(cx * 0.012 + cy * 0.017 + now * 2.1) * 0.6 +
-                             Math.sin(cy * 0.03 - now * 3.1) * 0.4);
-            dy += ambient * 0.8 * (Math.cos(cx * 0.02 - now * 2.4) * 0.5 +
-                                   Math.sin(cy * 0.011 + cx * 0.009 + now * 1.6) * 0.5);
-          }
-
-          // Golven vanaf de cursor
-          for (let k = 0; k < nG; k++) {
-            const ddx = cx - gx[k];
-            const ddy = cy - gy[k];
-            const d = Math.sqrt(ddx * ddx + ddy * ddy);
-            const ring = d - gFront[k];
-            if (ring > 200 || ring < -200) continue;
-            const env = Math.exp(-(ring * ring) / (2 * 70 * 70));
-            const s = Math.sin(ring * 0.14) * env * gAmp[k];
-            if (d > 1) {
-              dx += (ddx / d) * s;
-              dy += (ddy / d) * s;
-            }
-          }
-
-          // Verdampen of verschijnen
-          let a = 1;
-          if (modus === "verdampen") {
-            const cp = clamp((evap - h * 0.5) / 0.5, 0, 1);
-            a = 1 - cp;
-            dy += cp * cp * 140;
-            dx += Math.sin(cy * 0.05 + now * 3) * cp * 30;
-          } else if (modus === "woorden") {
-            a = clamp((intro - h * 0.5) / 0.5, 0, 1);
-            dy += (1 - a) * (1 - a) * 60;
-          }
-
-          if (a <= 0.003) continue;
-          ctx.globalAlpha = a;
-          ctx.drawImage(bron, (x + dx) * dpr, (y + dy) * dpr, cd, cd,
-                        x * dpr, y * dpr, cd, cd);
+        // Golven die vanaf de cursor uitwaaieren
+        for (int i = 0; i < ${MAX_GOLVEN}; i++) {
+          vec4 r = uRip[i];
+          float age = uTime - r.z;
+          if (age < 0.0 || age > 3.5) continue;
+          vec2 v = pos - r.xy;
+          float dist = length(v);
+          float ring = dist - age * 240.0;
+          float env = exp(-ring * ring / (2.0 * 80.0 * 80.0));
+          float life = 1.0 - age / 3.5;
+          float s = sin(ring * 0.05) * env * r.w * life * life;
+          d += v / max(dist, 1.0) * s;
         }
+
+        // Verdampen / condenseren: zacht, met ruis en wazigheid
+        float n = noise(pos * 0.006 + vec2(0.0, uTime * 0.3)) * 0.65
+                + noise(pos * 0.015 - vec2(uTime * 0.2, 0.0)) * 0.35;
+        float cp = smoothstep(0.0, 1.0, clamp(uVanish * 1.7 - n * 0.7, 0.0, 1.0));
+        d.y += cp * cp * uRise;
+        d.x += sin(pos.y * 0.03 + uTime * 2.0) * cp * 18.0;
+
+        vec2 sp = pos + d;
+        float br = cp * 14.0;
+
+        // Zachte blur die toeneemt tijdens het verdampen
+        float a = 0.0;
+        for (int i = 0; i < 9; i++) {
+          vec2 o = vec2(0.0);
+          if (i > 0) {
+            float ang = float(i) * 0.785398;
+            o = vec2(cos(ang), sin(ang)) * br;
+          }
+          a += texture2D(uTex, (sp + o) * uDpr / uRes).a;
+        }
+        a /= 9.0;
+
+        float alpha = a * (1.0 - cp);
+        gl_FragColor = vec4(mix(vec3(1.0), ORANJE, alpha), 1.0);
       }
-      ctx.globalAlpha = 1;
+    `;
+
+    if (!gl) {
+      hint.textContent = "Je browser ondersteunt WebGL niet.";
+    } else {
+      start();
+    }
+
+    function start() {
+      function maakShader(type, src) {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, src);
+        gl.compileShader(s);
+        return s;
+      }
+      const prog = gl.createProgram();
+      gl.attachShader(prog, maakShader(gl.VERTEX_SHADER, VERT));
+      gl.attachShader(prog, maakShader(gl.FRAGMENT_SHADER, FRAG));
+      gl.linkProgram(prog);
+      gl.useProgram(prog);
+
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+      const aPos = gl.getAttribLocation(prog, "aPos");
+      gl.enableVertexAttribArray(aPos);
+      gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+      const U = {};
+      ["uTex", "uRes", "uDpr", "uTime", "uAmbient", "uVanish", "uRise", "uRip"].forEach(function (n) {
+        U[n] = gl.getUniformLocation(prog, n);
+      });
+
+      let W, H, dpr, texTitel, texWoorden;
+      let t0 = null;
+      const golven = [];
+      const ripData = new Float32Array(MAX_GOLVEN * 4);
+      let laatste = { x: -999, y: -999, t: 0 };
+
+      function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+      function maakTextuur(regels) {
+        const c = document.createElement("canvas");
+        c.width = Math.round(W * dpr);
+        c.height = Math.round(H * dpr);
+        const g = c.getContext("2d");
+        g.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        const LH = 0.95;
+        g.font = "700 100px " + FONT;
+        let breedste = 0;
+        regels.forEach(function (r) {
+          breedste = Math.max(breedste, g.measureText(r).width);
+        });
+        const maat = Math.min(
+          (W * 0.92) / breedste * 100,
+          (H * 0.92) / (regels.length * LH)
+        );
+
+        g.font = "700 " + maat + "px " + FONT;
+        g.fillStyle = "#000";
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        regels.forEach(function (r, i) {
+          const y = H / 2 + (i - (regels.length - 1) / 2) * maat * LH;
+          g.fillText(r, W / 2, y);
+        });
+
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        return tex;
+      }
+
+      function init() {
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        W = window.innerWidth;
+        H = window.innerHeight;
+        canvas.width = Math.round(W * dpr);
+        canvas.height = Math.round(H * dpr);
+        canvas.style.width = W + "px";
+        canvas.style.height = H + "px";
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        texTitel = maakTextuur(TITEL);
+        texWoorden = maakTextuur(WOORDEN);
+      }
+
+      function frame(ts) {
+        const now = ts / 1000;
+        const el = t0 === null ? 0 : now - t0;
+
+        let tex = texTitel;
+        let ambient = 0;
+        let vanish = 0;
+        let rise = 120;
+        const smelt = clamp(el / GOLFTIJD, 0, 1);
+
+        if (el < GOLFTIJD) {
+          ambient = smelt * smelt * 28;
+        } else if (el < GOLFTIJD + VERDAMPTIJD) {
+          vanish = (el - GOLFTIJD) / VERDAMPTIJD;
+          ambient = 28 + vanish * 14;
+        } else {
+          tex = texWoorden;
+          const intro = clamp((el - GOLFTIJD - VERDAMPTIJD) / INTROTIJD, 0, 1);
+          vanish = 1 - intro;
+          rise = -80;
+          ambient = (1 - intro) * (1 - intro) * 24;
+        }
+
+        // Golven doorgeven aan de shader
+        ripData.fill(0);
+        for (let i = 0; i < MAX_GOLVEN; i++) ripData[i * 4 + 2] = -1000;
+        for (let i = 0; i < golven.length; i++) {
+          const g = golven[i];
+          ripData[i * 4] = g.x;
+          ripData[i * 4 + 1] = g.y;
+          ripData[i * 4 + 2] = g.t;
+          ripData[i * 4 + 3] = 9 * (1 + smelt * 1.6);
+        }
+
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.uniform1i(U.uTex, 0);
+        gl.uniform2f(U.uRes, canvas.width, canvas.height);
+        gl.uniform1f(U.uDpr, dpr);
+        gl.uniform1f(U.uTime, now);
+        gl.uniform1f(U.uAmbient, ambient);
+        gl.uniform1f(U.uVanish, vanish);
+        gl.uniform1f(U.uRise, rise);
+        gl.uniform4fv(U.uRip, ripData);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        requestAnimationFrame(frame);
+      }
+
+      window.addEventListener("pointermove", function (e) {
+        const now = performance.now() / 1000;
+        if (t0 === null) {
+          t0 = now;
+          hint.style.opacity = 0;
+        }
+        const afstand = Math.hypot(e.clientX - laatste.x, e.clientY - laatste.y);
+        if (afstand > 14 && now - laatste.t > 0.06) {
+          golven.push({ x: e.clientX, y: e.clientY, t: now });
+          if (golven.length > MAX_GOLVEN) golven.shift();
+          laatste = { x: e.clientX, y: e.clientY, t: now };
+        }
+      });
+
+      let resizeTimer;
+      window.addEventListener("resize", function () {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(init, 200);
+      });
+
+      init();
       requestAnimationFrame(frame);
     }
-
-    window.addEventListener("pointermove", function (e) {
-      const now = performance.now() / 1000;
-      if (t0 === null) {
-        t0 = now;
-        hint.style.opacity = 0;
-      }
-      const afstand = Math.hypot(e.clientX - laatste.x, e.clientY - laatste.y);
-      if (afstand > 20) {
-        golven.push({ x: e.clientX, y: e.clientY, t: now });
-        if (golven.length > 60) golven.shift();
-        laatste = { x: e.clientX, y: e.clientY };
-      }
-    });
-
-    let resizeTimer;
-    window.addEventListener("resize", function () {
-      clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(init, 200);
-    });
-
-    init();
-    requestAnimationFrame(frame);
   </script>
 </body>
 </html>
