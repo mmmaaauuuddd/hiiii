@@ -3,31 +3,156 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Soepmenu</title>
+  <title>Soep van de dag</title>
   <style>
+    * {
+      box-sizing: border-box;
+    }
+
     body {
-      font-family: Helvetica, Arial, sans-serif;
-      margin: 40px;
-    }
-
-    ul {
-      list-style: none;
-      padding: 0;
       margin: 0;
+      font-family: Helvetica, Arial, sans-serif;
+      color: #000;
+      background: #fff;
     }
 
-    li {
-      padding: 12px 0;
-      border-bottom: 1px dashed #000;
+    /* Bovenste balk met de vier dagen */
+    nav {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border-bottom: 1px solid #000;
+    }
+
+    nav button {
+      font-family: inherit;
+      font-size: clamp(14px, 3vw, 32px);
+      padding: 18px 20px;
+      background: #fff;
+      color: #000;
+      border: none;
+      border-right: 1px solid #000;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.2s;
+    }
+
+    nav button:last-child {
+      border-right: none;
+    }
+
+    nav button:hover {
+      background: #f7e3f1;
+    }
+
+    nav button.active {
+      background: #000;
+      color: #fff;
+    }
+
+    /* Roze vlak met grote titel */
+    .hero {
+      background: #f0c8e4;
+      padding: 60px 20px;
+      border-bottom: 1px solid #000;
+      text-align: center;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: clamp(48px, 13vw, 190px);
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      line-height: 1;
+    }
+
+    /* Uitleg onder de titel */
+    .info {
+      padding: 40px 50px 80px;
+      max-width: 1100px;
+    }
+
+    .info h2 {
+      margin: 0 0 10px;
+      font-size: clamp(28px, 5vw, 60px);
+      font-weight: 400;
+    }
+
+    .info p {
+      margin: 0 0 10px;
+      font-size: clamp(22px, 4vw, 48px);
+      line-height: 1.2;
+      font-weight: 400;
+    }
+
+    .hint {
+      color: #777;
     }
   </style>
 </head>
 <body>
-  <ul>
-    <li>Maandag: spinaziesoep.</li>
-    <li>Dinsdag: Paprikasoep.</li>
-    <li>Woensdag: Paprikasoep.</li>
-    <li>Donderdag: Knolseldersoep.</li>
-  </ul>
+
+  <nav>
+    <button data-dag="maandag">Maandag</button>
+    <button data-dag="dinsdag">Dinsdag</button>
+    <button data-dag="woensdag">Woensdag</button>
+    <button data-dag="donderdag">Donderdag</button>
+  </nav>
+
+  <section class="hero">
+    <h1>Soep van de dag</h1>
+  </section>
+
+  <section class="info" id="info">
+    <p class="hint">Klik op een dag om te zien welke soep het was.</p>
+  </section>
+
+  <script>
+    const soepen = {
+      maandag: {
+        naam: "Spinaziesoep",
+        prijs: "€1,70",
+        smaak: "3,5/5",
+        uitleg: "De soep was redelijk dik met wat brokjes in."
+      },
+      dinsdag: {
+        naam: "Paprikasoep",
+        prijs: "€1,70",
+        smaak: "4,5/5",
+        uitleg: "Een heerlijke, zachte soep."
+      },
+      woensdag: {
+        naam: "Paprikasoep",
+        prijs: "€2,70",
+        smaak: "4,5/5",
+        uitleg: "Dezelfde soep als dinsdag, deze keer een grote omdat ik het zeer lekker vond."
+      },
+      donderdag: {
+        naam: "Knolseldersoep",
+        prijs: "€1,70",
+        smaak: "4/5",
+        uitleg: "Verrassend lekker, maar na een tijdje wat pikant."
+      }
+    };
+
+    const knoppen = document.querySelectorAll("nav button");
+    const info = document.getElementById("info");
+
+    knoppen.forEach(function (knop) {
+      knop.addEventListener("click", function () {
+        const dag = knop.dataset.dag;
+        const soep = soepen[dag];
+
+        knoppen.forEach(function (k) { k.classList.remove("active"); });
+        knop.classList.add("active");
+
+        info.innerHTML =
+          "<h2>" + soep.naam + "</h2>" +
+          "<p>Prijs: " + soep.prijs + "</p>" +
+          "<p>Smaak: " + soep.smaak + "</p>" +
+          "<p>" + soep.uitleg + "</p>";
+      });
+    });
+  </script>
+
 </body>
 </html>
