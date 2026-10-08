@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Soepmenu</title>
+  <style>
+    body {
+      font-family: Helvetica, Arial, sans-serif;
+      margin: 40px;
+    }
+
+    ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    li {
+      padding: 12px 0;
+      border-bottom: 1px dashed #000;
+    }
+  </style>
+</head>
+<body>
+  <ul>
+    <li>Maandag: spinaziesoep.</li>
+    <li>Dinsdag: Paprikasoep.</li>
+    <li>Woensdag: Paprikasoep.</li>
+    <li>Donderdag: Knolseldersoep.</li>
+  </ul>
+</body>
+</html>
