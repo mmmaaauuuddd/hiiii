@@ -3,156 +3,218 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Soep van de dag</title>
+  <title>Soepen</title>
   <style>
-    * {
-      box-sizing: border-box;
-    }
-
-    body {
+    html, body {
       margin: 0;
-      font-family: Helvetica, Arial, sans-serif;
-      color: #000;
-      background: #fff;
+      height: 100%;
+      overflow: hidden;
+      background: #ffb877;
+      touch-action: none;
     }
-
-    /* Bovenste balk met de vier dagen */
-    nav {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      border-bottom: 1px solid #000;
-    }
-
-    nav button {
-      font-family: inherit;
-      font-size: clamp(14px, 3vw, 32px);
-      padding: 18px 20px;
-      background: #fff;
-      color: #000;
-      border: none;
-      border-right: 1px solid #000;
-      cursor: pointer;
-      text-align: left;
-      transition: background 0.2s;
-    }
-
-    nav button:last-child {
-      border-right: none;
-    }
-
-    nav button:hover {
-      background: #f7e3f1;
-    }
-
-    nav button.active {
-      background: #000;
-      color: #fff;
-    }
-
-    /* Roze vlak met grote titel */
-    .hero {
-      background: #f0c8e4;
-      padding: 60px 20px;
-      border-bottom: 1px solid #000;
-      text-align: center;
-    }
-
-    .hero h1 {
-      margin: 0;
-      font-size: clamp(48px, 13vw, 190px);
-      font-weight: 700;
-      letter-spacing: -0.04em;
-      line-height: 1;
-    }
-
-    /* Uitleg onder de titel */
-    .info {
-      padding: 40px 50px 80px;
-      max-width: 1100px;
-    }
-
-    .info h2 {
-      margin: 0 0 10px;
-      font-size: clamp(28px, 5vw, 60px);
-      font-weight: 400;
-    }
-
-    .info p {
-      margin: 0 0 10px;
-      font-size: clamp(22px, 4vw, 48px);
-      line-height: 1.2;
-      font-weight: 400;
-    }
-
-    .hint {
-      color: #777;
+    canvas {
+      display: block;
     }
   </style>
 </head>
 <body>
-
-  <nav>
-    <button data-dag="maandag">Maandag</button>
-    <button data-dag="dinsdag">Dinsdag</button>
-    <button data-dag="woensdag">Woensdag</button>
-    <button data-dag="donderdag">Donderdag</button>
-  </nav>
-
-  <section class="hero">
-    <h1>Soep van de dag</h1>
-  </section>
-
-  <section class="info" id="info">
-    <p class="hint">Klik op een dag om te zien welke soep het was.</p>
-  </section>
+  <canvas id="c"></canvas>
 
   <script>
-    const soepen = {
-      maandag: {
-        naam: "Spinaziesoep",
-        prijs: "€1,70",
-        smaak: "3,5/5",
-        uitleg: "De soep was redelijk dik met wat brokjes in."
-      },
-      dinsdag: {
-        naam: "Paprikasoep",
-        prijs: "€1,70",
-        smaak: "4,5/5",
-        uitleg: "Een heerlijke, zachte soep."
-      },
-      woensdag: {
-        naam: "Paprikasoep",
-        prijs: "€2,70",
-        smaak: "4,5/5",
-        uitleg: "Dezelfde soep als dinsdag, deze keer een grote omdat ik het zeer lekker vond."
-      },
-      donderdag: {
-        naam: "Knolseldersoep",
-        prijs: "€1,70",
-        smaak: "4/5",
-        uitleg: "Verrassend lekker, maar na een tijdje wat pikant."
-      }
-    };
+    const canvas = document.getElementById("c");
+    const ctx = canvas.getContext("2d");
 
-    const knoppen = document.querySelectorAll("nav button");
-    const info = document.getElementById("info");
+    const FONT = "Helvetica, Arial, sans-serif";
+    const WOORDEN = ["maandag", "dinsdag", "woensdag", "donderdag"];
+    const ALFABET = "abcdefghijklmnopqrstuvwxyz";
+    const RADIUS = 170; // hoe groot het "blaasgebied" rond de cursor is
 
-    knoppen.forEach(function (knop) {
-      knop.addEventListener("click", function () {
-        const dag = knop.dataset.dag;
-        const soep = soepen[dag];
+    let W, H, dpr;
+    let letters = [];
+    let ruisTotaal = 0;
+    let ruisOver = 0;
 
-        knoppen.forEach(function (k) { k.classList.remove("active"); });
-        knop.classList.add("active");
+    const muis = { x: 0, y: 0, vx: 0, vy: 0, actief: false };
 
-        info.innerHTML =
-          "<h2>" + soep.naam + "</h2>" +
-          "<p>Prijs: " + soep.prijs + "</p>" +
-          "<p>Smaak: " + soep.smaak + "</p>" +
-          "<p>" + soep.uitleg + "</p>";
+    function init() {
+      dpr = window.devicePixelRatio || 1;
+      W = window.innerWidth;
+      H = window.innerHeight;
+      canvas.width = W * dpr;
+      canvas.height = H * dpr;
+      canvas.style.width = W + "px";
+      canvas.style.height = H + "px";
+      letters = [];
+
+      // De letters van de vier woorden: ze beginnen verspreid
+      // en vinden pas hun plek als de rest weg is.
+      const maat = Math.max(26, Math.min(W / 10, 96));
+      ctx.font = "700 " + maat + "px " + FONT;
+      const regel = maat * 1.05;
+      const startY = H / 2 - ((WOORDEN.length - 1) * regel) / 2;
+
+      WOORDEN.forEach(function (woord, i) {
+        const tekens = woord.split("");
+        const breedtes = tekens.map(function (c) { return ctx.measureText(c).width; });
+        const totaal = breedtes.reduce(function (a, b) { return a + b; }, 0);
+        let x = W / 2 - totaal / 2;
+
+        tekens.forEach(function (c, j) {
+          letters.push({
+            char: c,
+            x: Math.random() * W,
+            y: Math.random() * H,
+            vx: 0, vy: 0,
+            a: (Math.random() - 0.5) * Math.PI * 2,
+            va: 0,
+            size: maat,
+            woord: true,
+            hx: x + breedtes[j] / 2,
+            hy: startY + i * regel
+          });
+          x += breedtes[j];
+        });
       });
-    });
-  </script>
 
+      // De losse letters die weggeveegd moeten worden
+      const aantal = Math.round((W * H) / 2600);
+      for (let i = 0; i < aantal; i++) {
+        letters.push({
+          char: ALFABET[Math.floor(Math.random() * ALFABET.length)],
+          x: Math.random() * W,
+          y: Math.random() * H,
+          vx: 0, vy: 0,
+          a: (Math.random() - 0.5) * Math.PI * 2,
+          va: 0,
+          size: maat * (0.35 + Math.random() * 0.8),
+          woord: false
+        });
+      }
+      ruisTotaal = aantal;
+      ruisOver = aantal;
+    }
+
+    function stap() {
+      // Hoe meer losse letters weg zijn, hoe sterker de woorden naar hun plek trekken
+      const voortgang = Math.min(1, (1 - ruisOver / ruisTotaal) / 0.95);
+      const veer = 0.014 * voortgang * voortgang * voortgang;
+      const wrijvingWoord = 0.95 - 0.08 * voortgang;
+
+      muis.vx *= 0.85;
+      muis.vy *= 0.85;
+
+      for (let i = letters.length - 1; i >= 0; i--) {
+        const l = letters[i];
+
+        // Cursor duwt de letters weg, het sterkst vlak bij de cursor
+        if (muis.actief) {
+          const dx = l.x - muis.x;
+          const dy = l.y - muis.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < RADIUS * RADIUS && d2 > 0.01) {
+            const d = Math.sqrt(d2);
+            const f = 1 - d / RADIUS;
+            const sterkte = f * f;
+            l.vx += (dx / d) * sterkte * 2.5 + muis.vx * sterkte * 0.12;
+            l.vy += (dy / d) * sterkte * 2.5 + muis.vy * sterkte * 0.12;
+            l.va += (Math.random() - 0.5) * 0.14 * sterkte;
+          }
+        }
+
+        // Woordletters veren terug naar hun plek in het woord
+        if (l.woord) {
+          l.vx += (l.hx - l.x) * veer;
+          l.vy += (l.hy - l.y) * veer;
+          l.a = ((((l.a + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) - Math.PI;
+          l.va += -l.a * veer * 3;
+        }
+
+        // Maximale snelheid
+        const snelheid = Math.hypot(l.vx, l.vy);
+        if (snelheid > 35) {
+          l.vx = (l.vx / snelheid) * 35;
+          l.vy = (l.vy / snelheid) * 35;
+        }
+
+        const wrijving = l.woord ? wrijvingWoord : 0.95;
+        l.vx *= wrijving;
+        l.vy *= wrijving;
+        l.va *= 0.92;
+
+        l.x += l.vx;
+        l.y += l.vy;
+        l.a += l.va;
+
+        if (l.woord) {
+          // Woordletters blijven in beeld
+          if (l.x < 0) { l.x = 0; l.vx *= -0.5; }
+          if (l.x > W) { l.x = W; l.vx *= -0.5; }
+          if (l.y < 0) { l.y = 0; l.vy *= -0.5; }
+          if (l.y > H) { l.y = H; l.vy *= -0.5; }
+        } else if (l.x < -100 || l.x > W + 100 || l.y < -100 || l.y > H + 100) {
+          // Losse letters die het scherm uit zijn, verdwijnen
+          letters.splice(i, 1);
+          ruisOver--;
+        }
+      }
+    }
+
+    function teken() {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#ffffff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+
+      for (let i = 0; i < letters.length; i++) {
+        const l = letters[i];
+        const c = Math.cos(l.a);
+        const s = Math.sin(l.a);
+        ctx.setTransform(c * dpr, s * dpr, -s * dpr, c * dpr, l.x * dpr, l.y * dpr);
+        ctx.font = "700 " + Math.round(l.size) + "px " + FONT;
+        ctx.fillText(l.char, 0, 0);
+      }
+    }
+
+    function loop() {
+      stap();
+      teken();
+      requestAnimationFrame(loop);
+    }
+
+    // Cursor en touch
+    window.addEventListener("pointermove", function (e) {
+      if (muis.actief) {
+        muis.vx = muis.vx * 0.5 + (e.clientX - muis.x) * 0.5;
+        muis.vy = muis.vy * 0.5 + (e.clientY - muis.y) * 0.5;
+      }
+      muis.x = e.clientX;
+      muis.y = e.clientY;
+      muis.actief = true;
+    });
+
+    window.addEventListener("pointerdown", function (e) {
+      muis.x = e.clientX;
+      muis.y = e.clientY;
+      muis.actief = true;
+    });
+
+    window.addEventListener("pointerup", function (e) {
+      if (e.pointerType === "touch") muis.actief = false;
+    });
+
+    document.documentElement.addEventListener("mouseleave", function () {
+      muis.actief = false;
+    });
+
+    let resizeTimer;
+    window.addEventListener("resize", function () {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(init, 200);
+    });
+
+    init();
+    loop();
+  </script>
 </body>
 </html>
