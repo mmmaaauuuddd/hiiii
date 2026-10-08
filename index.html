@@ -3,208 +3,225 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Soepen</title>
+  <title>Soep van de dag</title>
   <style>
     html, body {
       margin: 0;
       height: 100%;
       overflow: hidden;
-      background: #ffb877;
+      background: #fff;
       touch-action: none;
     }
     canvas {
       display: block;
     }
+    #hint {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 24px;
+      text-align: center;
+      font-family: Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      color: #999;
+      transition: opacity 0.8s;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
   <canvas id="c"></canvas>
+  <div id="hint">Beweeg je cursor over de letters</div>
 
   <script>
     const canvas = document.getElementById("c");
     const ctx = canvas.getContext("2d");
+    const hint = document.getElementById("hint");
 
     const FONT = "Helvetica, Arial, sans-serif";
+    const TITEL = ["Soep", "van de", "dag"];
     const WOORDEN = ["maandag", "dinsdag", "woensdag", "donderdag"];
-    const ALFABET = "abcdefghijklmnopqrstuvwxyz";
-    const RADIUS = 170; // hoe groot het "blaasgebied" rond de cursor is
 
-    let W, H, dpr;
-    let letters = [];
-    let ruisTotaal = 0;
-    let ruisOver = 0;
+    // Instellingen (in seconden)
+    const GOLFTIJD = 5;       // zo lang kun je met de letters spelen
+    const VERDAMPTIJD = 3;    // zo lang duurt het verdampen
+    const INTROTIJD = 2.5;    // zo lang duurt het zichtbaar worden van de dagen
+    const RIPPLE_LEVEN = 3;   // hoe lang een golf blijft bestaan
 
-    const muis = { x: 0, y: 0, vx: 0, vy: 0, actief: false };
+    let W, H, dpr, cell, nx, ny, hash;
+    let titelBron, woordenBron;
+    let t0 = null;
+    const golven = [];
+    let laatste = { x: -999, y: -999 };
+
+    function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+    // Tekent de regels groot op een apart canvas
+    function maakBron(regels) {
+      const c = document.createElement("canvas");
+      c.width = W * dpr;
+      c.height = H * dpr;
+      const g = c.getContext("2d");
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.fillStyle = "#fff";
+      g.fillRect(0, 0, W, H);
+
+      const LH = 0.95;
+      g.font = "700 100px " + FONT;
+      let breedste = 0;
+      regels.forEach(function (r) {
+        breedste = Math.max(breedste, g.measureText(r).width);
+      });
+      const maat = Math.min(
+        (W * 0.92) / breedste * 100,
+        (H * 0.92) / (regels.length * LH)
+      );
+
+      g.font = "700 " + maat + "px " + FONT;
+      g.fillStyle = "#111";
+      g.textAlign = "center";
+      g.textBaseline = "middle";
+      regels.forEach(function (r, i) {
+        const y = H / 2 + (i - (regels.length - 1) / 2) * maat * LH;
+        g.fillText(r, W / 2, y);
+      });
+      return c;
+    }
 
     function init() {
-      dpr = window.devicePixelRatio || 1;
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
       W = window.innerWidth;
       H = window.innerHeight;
       canvas.width = W * dpr;
       canvas.height = H * dpr;
       canvas.style.width = W + "px";
       canvas.style.height = H + "px";
-      letters = [];
 
-      // De letters van de vier woorden: ze beginnen verspreid
-      // en vinden pas hun plek als de rest weg is.
-      const maat = Math.max(26, Math.min(W / 10, 96));
-      ctx.font = "700 " + maat + "px " + FONT;
-      const regel = maat * 1.05;
-      const startY = H / 2 - ((WOORDEN.length - 1) * regel) / 2;
+      cell = Math.max(8, Math.round(W / 150));
+      nx = Math.ceil(W / cell);
+      ny = Math.ceil(H / cell);
+      hash = new Float32Array(nx * ny);
+      for (let i = 0; i < hash.length; i++) hash[i] = Math.random();
 
-      WOORDEN.forEach(function (woord, i) {
-        const tekens = woord.split("");
-        const breedtes = tekens.map(function (c) { return ctx.measureText(c).width; });
-        const totaal = breedtes.reduce(function (a, b) { return a + b; }, 0);
-        let x = W / 2 - totaal / 2;
-
-        tekens.forEach(function (c, j) {
-          letters.push({
-            char: c,
-            x: Math.random() * W,
-            y: Math.random() * H,
-            vx: 0, vy: 0,
-            a: (Math.random() - 0.5) * Math.PI * 2,
-            va: 0,
-            size: maat,
-            woord: true,
-            hx: x + breedtes[j] / 2,
-            hy: startY + i * regel
-          });
-          x += breedtes[j];
-        });
-      });
-
-      // De losse letters die weggeveegd moeten worden
-      const aantal = Math.round((W * H) / 2600);
-      for (let i = 0; i < aantal; i++) {
-        letters.push({
-          char: ALFABET[Math.floor(Math.random() * ALFABET.length)],
-          x: Math.random() * W,
-          y: Math.random() * H,
-          vx: 0, vy: 0,
-          a: (Math.random() - 0.5) * Math.PI * 2,
-          va: 0,
-          size: maat * (0.35 + Math.random() * 0.8),
-          woord: false
-        });
-      }
-      ruisTotaal = aantal;
-      ruisOver = aantal;
+      titelBron = maakBron(TITEL);
+      woordenBron = maakBron(WOORDEN);
     }
 
-    function stap() {
-      // Hoe meer losse letters weg zijn, hoe sterker de woorden naar hun plek trekken
-      const voortgang = Math.min(1, (1 - ruisOver / ruisTotaal) / 0.95);
-      const veer = 0.014 * voortgang * voortgang * voortgang;
-      const wrijvingWoord = 0.95 - 0.08 * voortgang;
+    function frame(ts) {
+      const now = ts / 1000;
+      const el = t0 === null ? 0 : now - t0;
 
-      muis.vx *= 0.85;
-      muis.vy *= 0.85;
+      // Welke fase zitten we in?
+      let bron = titelBron;
+      let modus = "titel";
+      let ambient = 0;
+      let evap = 0;
+      let intro = 0;
+      const smelt = clamp(el / GOLFTIJD, 0, 1);
 
-      for (let i = letters.length - 1; i >= 0; i--) {
-        const l = letters[i];
-
-        // Cursor duwt de letters weg, het sterkst vlak bij de cursor
-        if (muis.actief) {
-          const dx = l.x - muis.x;
-          const dy = l.y - muis.y;
-          const d2 = dx * dx + dy * dy;
-          if (d2 < RADIUS * RADIUS && d2 > 0.01) {
-            const d = Math.sqrt(d2);
-            const f = 1 - d / RADIUS;
-            const sterkte = f * f;
-            l.vx += (dx / d) * sterkte * 2.5 + muis.vx * sterkte * 0.12;
-            l.vy += (dy / d) * sterkte * 2.5 + muis.vy * sterkte * 0.12;
-            l.va += (Math.random() - 0.5) * 0.14 * sterkte;
-          }
-        }
-
-        // Woordletters veren terug naar hun plek in het woord
-        if (l.woord) {
-          l.vx += (l.hx - l.x) * veer;
-          l.vy += (l.hy - l.y) * veer;
-          l.a = ((((l.a + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) - Math.PI;
-          l.va += -l.a * veer * 3;
-        }
-
-        // Maximale snelheid
-        const snelheid = Math.hypot(l.vx, l.vy);
-        if (snelheid > 35) {
-          l.vx = (l.vx / snelheid) * 35;
-          l.vy = (l.vy / snelheid) * 35;
-        }
-
-        const wrijving = l.woord ? wrijvingWoord : 0.95;
-        l.vx *= wrijving;
-        l.vy *= wrijving;
-        l.va *= 0.92;
-
-        l.x += l.vx;
-        l.y += l.vy;
-        l.a += l.va;
-
-        if (l.woord) {
-          // Woordletters blijven in beeld
-          if (l.x < 0) { l.x = 0; l.vx *= -0.5; }
-          if (l.x > W) { l.x = W; l.vx *= -0.5; }
-          if (l.y < 0) { l.y = 0; l.vy *= -0.5; }
-          if (l.y > H) { l.y = H; l.vy *= -0.5; }
-        } else if (l.x < -100 || l.x > W + 100 || l.y < -100 || l.y > H + 100) {
-          // Losse letters die het scherm uit zijn, verdwijnen
-          letters.splice(i, 1);
-          ruisOver--;
-        }
+      if (el < GOLFTIJD) {
+        ambient = smelt * smelt * 60;
+      } else if (el < GOLFTIJD + VERDAMPTIJD) {
+        modus = "verdampen";
+        evap = (el - GOLFTIJD) / VERDAMPTIJD;
+        ambient = 60 + evap * 30;
+      } else {
+        modus = "woorden";
+        bron = woordenBron;
+        intro = clamp((el - GOLFTIJD - VERDAMPTIJD) / INTROTIJD, 0, 1);
+        ambient = (1 - intro) * (1 - intro) * 50;
       }
-    }
 
-    function teken() {
+      // Verlopen golven opruimen
+      for (let i = golven.length - 1; i >= 0; i--) {
+        if (now - golven[i].t > RIPPLE_LEVEN) golven.splice(i, 1);
+      }
+      const nG = golven.length;
+      const gx = new Float32Array(nG);
+      const gy = new Float32Array(nG);
+      const gAmp = new Float32Array(nG);
+      const gFront = new Float32Array(nG);
+      for (let k = 0; k < nG; k++) {
+        const age = now - golven[k].t;
+        gx[k] = golven[k].x;
+        gy[k] = golven[k].y;
+        gAmp[k] = 24 * Math.pow(1 - age / RIPPLE_LEVEN, 1.5) * (1 + smelt * 1.5);
+        gFront[k] = age * 320;
+      }
+
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "#ffffff";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      for (let i = 0; i < letters.length; i++) {
-        const l = letters[i];
-        const c = Math.cos(l.a);
-        const s = Math.sin(l.a);
-        ctx.setTransform(c * dpr, s * dpr, -s * dpr, c * dpr, l.x * dpr, l.y * dpr);
-        ctx.font = "700 " + Math.round(l.size) + "px " + FONT;
-        ctx.fillText(l.char, 0, 0);
+      const cd = cell * dpr;
+      for (let j = 0; j < ny; j++) {
+        const y = j * cell;
+        const cy = y + cell / 2;
+        for (let i = 0; i < nx; i++) {
+          const x = i * cell;
+          const cx = x + cell / 2;
+          const h = hash[j * nx + i];
+          let dx = 0;
+          let dy = 0;
+
+          // Golfbeweging door het hele woord
+          if (ambient > 0) {
+            dx += ambient * (Math.sin(cx * 0.012 + cy * 0.017 + now * 2.1) * 0.6 +
+                             Math.sin(cy * 0.03 - now * 3.1) * 0.4);
+            dy += ambient * 0.8 * (Math.cos(cx * 0.02 - now * 2.4) * 0.5 +
+                                   Math.sin(cy * 0.011 + cx * 0.009 + now * 1.6) * 0.5);
+          }
+
+          // Golven vanaf de cursor
+          for (let k = 0; k < nG; k++) {
+            const ddx = cx - gx[k];
+            const ddy = cy - gy[k];
+            const d = Math.sqrt(ddx * ddx + ddy * ddy);
+            const ring = d - gFront[k];
+            if (ring > 200 || ring < -200) continue;
+            const env = Math.exp(-(ring * ring) / (2 * 70 * 70));
+            const s = Math.sin(ring * 0.14) * env * gAmp[k];
+            if (d > 1) {
+              dx += (ddx / d) * s;
+              dy += (ddy / d) * s;
+            }
+          }
+
+          // Verdampen of verschijnen
+          let a = 1;
+          if (modus === "verdampen") {
+            const cp = clamp((evap - h * 0.5) / 0.5, 0, 1);
+            a = 1 - cp;
+            dy += cp * cp * 140;
+            dx += Math.sin(cy * 0.05 + now * 3) * cp * 30;
+          } else if (modus === "woorden") {
+            a = clamp((intro - h * 0.5) / 0.5, 0, 1);
+            dy += (1 - a) * (1 - a) * 60;
+          }
+
+          if (a <= 0.003) continue;
+          ctx.globalAlpha = a;
+          ctx.drawImage(bron, (x + dx) * dpr, (y + dy) * dpr, cd, cd,
+                        x * dpr, y * dpr, cd, cd);
+        }
       }
+      ctx.globalAlpha = 1;
+      requestAnimationFrame(frame);
     }
 
-    function loop() {
-      stap();
-      teken();
-      requestAnimationFrame(loop);
-    }
-
-    // Cursor en touch
     window.addEventListener("pointermove", function (e) {
-      if (muis.actief) {
-        muis.vx = muis.vx * 0.5 + (e.clientX - muis.x) * 0.5;
-        muis.vy = muis.vy * 0.5 + (e.clientY - muis.y) * 0.5;
+      const now = performance.now() / 1000;
+      if (t0 === null) {
+        t0 = now;
+        hint.style.opacity = 0;
       }
-      muis.x = e.clientX;
-      muis.y = e.clientY;
-      muis.actief = true;
-    });
-
-    window.addEventListener("pointerdown", function (e) {
-      muis.x = e.clientX;
-      muis.y = e.clientY;
-      muis.actief = true;
-    });
-
-    window.addEventListener("pointerup", function (e) {
-      if (e.pointerType === "touch") muis.actief = false;
-    });
-
-    document.documentElement.addEventListener("mouseleave", function () {
-      muis.actief = false;
+      const afstand = Math.hypot(e.clientX - laatste.x, e.clientY - laatste.y);
+      if (afstand > 20) {
+        golven.push({ x: e.clientX, y: e.clientY, t: now });
+        if (golven.length > 60) golven.shift();
+        laatste = { x: e.clientX, y: e.clientY };
+      }
     });
 
     let resizeTimer;
@@ -214,7 +231,7 @@
     });
 
     init();
-    loop();
+    requestAnimationFrame(frame);
   </script>
 </body>
 </html>
